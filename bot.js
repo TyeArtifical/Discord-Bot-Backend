@@ -4,11 +4,15 @@ require("dotenv").config();
 const config = require("./config.json");
 
 // Pull secrets from environment — fail fast with a clear message if missing
-const BOT_TOKEN = process.env.BOT_TOKEN;
+const BOT_TOKEN        = process.env.BOT_TOKEN;
 const WEBHOOK_BASE_URL = process.env.WEBHOOK_BASE_URL;
+const ALLOWED_GUILD_ID = process.env.ALLOWED_GUILD_ID;
+const ALLOWED_ROLE_ID  = process.env.ALLOWED_ROLE_ID;
 
-if (!BOT_TOKEN) throw new Error("Missing BOT_TOKEN in .env");
+if (!BOT_TOKEN)        throw new Error("Missing BOT_TOKEN in .env");
 if (!WEBHOOK_BASE_URL) throw new Error("Missing WEBHOOK_BASE_URL in .env");
+if (!ALLOWED_GUILD_ID) throw new Error("Missing ALLOWED_GUILD_ID in .env");
+if (!ALLOWED_ROLE_ID)  throw new Error("Missing ALLOWED_ROLE_ID in .env");
 
 const client = new Client({
   intents: [
@@ -19,104 +23,119 @@ const client = new Client({
   ],
 });
 
-client.once(Events.ClientReady, (readyClient) => {
+client.once(Events.ClientReady, async (readyClient) => {
   console.log(`✅ Bot is online as ${readyClient.user.tag}`);
-  console.log(`📋 Watching guild: ${config.allowed_guild_id}`);
-  console.log(`🔑 Required role:  ${config.allowed_role_id}`);
+  console.log(`📋 Watching guild: ${ALLOWED_GUILD_ID}`);
+  console.log(`🔑 Required role:  ${ALLOWED_ROLE_ID}`);
+
+  // Force-fetch all guild members into cache so GuildMemberUpdate fires reliably
+  try {
+    const guild = await client.guilds.fetch(ALLOWED_GUILD_ID);
+    await guild.members.fetch();
+    console.log(`✅ Cached ${guild.memberCount} members from guild "${guild.name}"`);
+  } catch (err) {
+    console.error(`❌ Failed to fetch guild members on startup: ${err.message}`);
+  }
 });
 
 // Fire when a guild member's roles (or other details) change
 client.on(Events.GuildMemberUpdate, async (oldMember, newMember) => {
-  // Only care about the configured guild
-  if (newMember.guild.id !== config.allowed_guild_id) return;
+  console.log(`🔄 GuildMemberUpdate fired for ${newMember.user.tag} (guild: ${newMember.guild.id})`);
 
-  const hadRole = oldMember.roles.cache.has(config.allowed_role_id);
-  const hasRole = newMember.roles.cache.has(config.allowed_role_id);
+  if (newMember.guild.id !== ALLOWED_GUILD_ID) {
+    console.log(`   ↳ Ignoring — wrong guild`);
+    return;
+  }
 
-  // Only trigger when the role was just added (not already there before)
+  const oldRoles = [...oldMember.roles.cache.keys()];
+  const newRoles = [...newMember.roles.cache.keys()];
+  console.log(`   ↳ Old roles: [${oldRoles.join(", ")}]`);
+  console.log(`   ↳ New roles: [${newRoles.join(", ")}]`);
+
+  const hadRole = oldMember.roles.cache.has(ALLOWED_ROLE_ID);
+  const hasRole = newMember.roles.cache.has(ALLOWED_ROLE_ID);
+  console.log(`   ↳ Had required role: ${hadRole} | Has required role: ${hasRole}`);
+
   if (!hadRole && hasRole) {
-    console.log(`🎉 Role granted to ${newMember.user.tag} (${newMember.user.id}) — sending DM`);
+    console.log(`🎉 Required role just granted to ${newMember.user.tag} — sending DM`);
     try {
       await newMember.user.send(config.role_granted_message);
       console.log(`✅ Role-granted DM sent to ${newMember.user.tag}`);
     } catch (err) {
-      // User may have DMs closed — log but don't crash
       console.warn(`⚠️  Could not DM ${newMember.user.tag}: ${err.message}`);
     }
+  } else {
+    console.log(`   ↳ No role change of interest — skipping`);
   }
 });
 
 /**
  * Check whether a user is in the allowed guild AND has the required role.
- * Returns true/false.
  */
 async function isAuthorized(userId) {
   try {
-    const guild = await client.guilds.fetch(config.allowed_guild_id);
+    console.log(`🔍 Checking authorization for user ${userId}...`);
+    const guild = await client.guilds.fetch(ALLOWED_GUILD_ID);
     const member = await guild.members.fetch(userId);
-    return member.roles.cache.has(config.allowed_role_id);
-  } catch {
-    // User not in guild, or guild/member fetch failed
+    const hasRole = member.roles.cache.has(ALLOWED_ROLE_ID);
+    console.log(`   ↳ Member found: ${member.user.tag} | Has required role: ${hasRole}`);
+    return hasRole;
+  } catch (err) {
+    console.log(`   ↳ User not in guild or fetch failed: ${err.message}`);
     return false;
   }
 }
 
 client.on(Events.MessageCreate, async (message) => {
-  // Only handle DMs from real users
   if (message.author.bot) return;
-  if (message.guild) return; // Ignore messages in servers
+  if (message.guild) return;
 
   const userId = message.author.id;
   const userTag = message.author.tag;
 
-  console.log(`📩 DM from ${userTag} (${userId}): ${message.content}`);
+  console.log(`📩 DM received from ${userTag} (${userId}): "${message.content}"`);
 
-  // Check authorization
   const authorized = await isAuthorized(userId);
   if (!authorized) {
-    console.log(`🚫 Unauthorized user: ${userTag} (${userId})`);
+    console.log(`🚫 Unauthorized — sending rejection message to ${userTag}`);
     await message.author.send(config.unauthorized_message).catch(console.error);
     return;
   }
 
-  // Build the webhook URL with encoded params
-  const encodedPrompt = encodeURIComponent(message.content);
+  console.log(`✅ Authorized — forwarding message to webhook`);
+
+  const encodedPrompt    = encodeURIComponent(message.content);
   const encodedSessionId = encodeURIComponent(userId);
   const webhookUrl = `${WEBHOOK_BASE_URL}?prompt=${encodedPrompt}&sessionid=${encodedSessionId}`;
 
-  try {
-    console.log(`🌐 Sending GET request for ${userTag}...`);
-    const response = await axios.get(webhookUrl, { timeout: 10000 });
+  console.log(`🌐 GET ${webhookUrl}`);
 
-    // Try to forward any text response from the webhook back to the user
+  try {
+    const response = await axios.get(webhookUrl, { timeout: 10000 });
+    console.log(`   ↳ Webhook status: ${response.status}`);
+    console.log(`   ↳ Webhook response: ${JSON.stringify(response.data)}`);
+
     let reply = null;
     if (response.data) {
-      if (typeof response.data === "string") {
-        reply = response.data;
-      } else if (response.data.message) {
-        reply = response.data.message;
-      } else if (response.data.reply) {
-        reply = response.data.reply;
-      } else if (response.data.text) {
-        reply = response.data.text;
-      }
+      if (typeof response.data === "string")  reply = response.data;
+      else if (response.data.message)         reply = response.data.message;
+      else if (response.data.reply)           reply = response.data.reply;
+      else if (response.data.text)            reply = response.data.text;
     }
 
     if (reply) {
+      console.log(`   ↳ Sending webhook reply to user: "${reply}"`);
       await message.author.send(reply).catch(console.error);
     } else {
-      // Acknowledge receipt if webhook returned no text body
+      console.log(`   ↳ No reply body from webhook — sending default ack`);
       await message.author.send("✅ Your message was received and processed!").catch(console.error);
     }
-
-    console.log(`✅ Webhook responded with status ${response.status} for ${userTag}`);
   } catch (err) {
-    console.error(`❌ Webhook request failed for ${userTag}:`, err.message);
+    console.error(`❌ Webhook request failed: ${err.message}`);
     await message.author.send(config.error_message).catch(console.error);
   }
 });
 
-// Log unhandled promise rejections so the process doesn't silently die
 process.on("unhandledRejection", (err) => {
   console.error("Unhandled promise rejection:", err);
 });
