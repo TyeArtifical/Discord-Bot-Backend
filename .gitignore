@@ -1,0 +1,5 @@
+# Secret environment variables — NEVER commit this
+.env
+
+# Dependencies
+node_modules/
