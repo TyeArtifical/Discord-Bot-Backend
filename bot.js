@@ -8,11 +8,15 @@ const BOT_TOKEN        = process.env.BOT_TOKEN;
 const WEBHOOK_BASE_URL = process.env.WEBHOOK_BASE_URL;
 const ALLOWED_GUILD_ID = process.env.ALLOWED_GUILD_ID;
 const ALLOWED_ROLE_ID  = process.env.ALLOWED_ROLE_ID;
+const WEBHOOK_USER     = process.env.WEBHOOK_USER;
+const WEBHOOK_PASS     = process.env.WEBHOOK_PASS;
 
 if (!BOT_TOKEN)        throw new Error("Missing BOT_TOKEN in .env");
 if (!WEBHOOK_BASE_URL) throw new Error("Missing WEBHOOK_BASE_URL in .env");
 if (!ALLOWED_GUILD_ID) throw new Error("Missing ALLOWED_GUILD_ID in .env");
 if (!ALLOWED_ROLE_ID)  throw new Error("Missing ALLOWED_ROLE_ID in .env");
+if (!WEBHOOK_USER)     throw new Error("Missing WEBHOOK_USER in .env");
+if (!WEBHOOK_PASS)     throw new Error("Missing WEBHOOK_PASS in .env");
 
 const client = new Client({
   intents: [
@@ -71,12 +75,14 @@ client.on(Events.GuildMemberUpdate, async (oldMember, newMember) => {
 
 /**
  * Check whether a user is in the allowed guild AND has the required role.
+ * Uses force:true to always get fresh role data from Discord, not stale cache.
  */
 async function isAuthorized(userId) {
   try {
     console.log(`🔍 Checking authorization for user ${userId}...`);
     const guild = await client.guilds.fetch(ALLOWED_GUILD_ID);
-    const member = await guild.members.fetch(userId);
+    // force: true bypasses local cache and fetches fresh data from Discord API
+    const member = await guild.members.fetch({ user: userId, force: true });
     const hasRole = member.roles.cache.has(ALLOWED_ROLE_ID);
     console.log(`   ↳ Member found: ${member.user.tag} | Has required role: ${hasRole}`);
     return hasRole;
@@ -111,7 +117,13 @@ client.on(Events.MessageCreate, async (message) => {
   console.log(`🌐 GET ${webhookUrl}`);
 
   try {
-    const response = await axios.get(webhookUrl, { timeout: 10000 });
+    const response = await axios.get(webhookUrl, {
+      timeout: 10000,
+      auth: {
+        username: WEBHOOK_USER,
+        password: WEBHOOK_PASS,
+      },
+    });
     console.log(`   ↳ Webhook status: ${response.status}`);
     console.log(`   ↳ Webhook response: ${JSON.stringify(response.data)}`);
 
