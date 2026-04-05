@@ -1,0 +1,14 @@
+{
+  "name": "discord-webhook-bot",
+  "version": "1.0.0",
+  "description": "Discord bot that gates DM access by guild role and forwards messages to a webhook",
+  "main": "bot.js",
+  "scripts": {
+    "start": "node bot.js"
+  },
+  "dependencies": {
+    "axios": "^1.7.2",
+    "discord.js": "^14.15.3",
+    "dotenv": "^16.4.5"
+  }
+}
