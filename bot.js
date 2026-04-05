@@ -118,7 +118,7 @@ client.on(Events.MessageCreate, async (message) => {
 
   try {
     const response = await axios.get(webhookUrl, {
-      timeout: 65000,
+      timeout: 75000,
       auth: {
         username: WEBHOOK_USER,
         password: WEBHOOK_PASS,
