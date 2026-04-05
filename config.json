@@ -1,0 +1,5 @@
+{
+  "unauthorized_message": "❌ You must be a member of our server with the required role to use this bot. Please join our server and obtain the necessary role first.",
+  "error_message": "⚠️ Something went wrong while processing your request. Please try again later.",
+  "role_granted_message": "🎉 You've been granted access to the bot! You can now DM me directly and I'll respond to your messages. Just send me anything to get started!"
+}
