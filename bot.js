@@ -108,20 +108,53 @@ client.on(Events.MessageCreate, async (message) => {
     return;
   }
 
-  console.log(`✅ Authorized — forwarding message to webhook`);
+  console.log(`✅ Authorized — processing message and attachments`);
 
-  const encodedPrompt    = encodeURIComponent(message.content);
-  const encodedSessionId = encodeURIComponent(userId);
-  const webhookUrl = `${WEBHOOK_BASE_URL}?prompt=${encodedPrompt}&sessionid=${encodedSessionId}`;
+  // Send immediate acknowledgment to avoid timeout appearance
+  let ackMessage = null;
+  try {
+    ackMessage = await message.author.send("⏳ Processing your message...");
+    console.log(`   ↳ Sent acknowledgment message`);
+  } catch (err) {
+    console.warn(`⚠️  Could not send acknowledgment: ${err.message}`);
+  }
 
-  console.log(`🌐 GET ${webhookUrl}`);
+  // Prepare the payload with text and attachments
+  const payload = {
+    prompt: message.content || "",
+    sessionid: userId,
+    attachments: []
+  };
+
+  // Process attachments (images, files, etc.)
+  if (message.attachments.size > 0) {
+    console.log(`📎 Processing ${message.attachments.size} attachment(s)`);
+    for (const [id, attachment] of message.attachments) {
+      payload.attachments.push({
+        id: attachment.id,
+        name: attachment.name,
+        url: attachment.url,
+        size: attachment.size,
+        contentType: attachment.contentType,
+        width: attachment.width || null,
+        height: attachment.height || null,
+      });
+      console.log(`   ↳ ${attachment.name} (${attachment.contentType}) - ${attachment.url}`);
+    }
+  }
+
+  console.log(`🌐 POST ${WEBHOOK_BASE_URL}`);
+  console.log(`   ↳ Payload: ${JSON.stringify(payload, null, 2)}`);
 
   try {
-    const response = await axios.get(webhookUrl, {
+    const response = await axios.post(WEBHOOK_BASE_URL, payload, {
       timeout: 190000,
       auth: {
         username: WEBHOOK_USER,
         password: WEBHOOK_PASS,
+      },
+      headers: {
+        'Content-Type': 'application/json',
       },
     });
     console.log(`   ↳ Webhook status: ${response.status}`);
@@ -137,14 +170,28 @@ client.on(Events.MessageCreate, async (message) => {
 
     if (reply) {
       console.log(`   ↳ Sending webhook reply to user: "${reply}"`);
+      // Delete the "processing" message if it exists
+      if (ackMessage) {
+        await ackMessage.delete().catch(() => {
+          console.log(`   ↳ Could not delete ack message, will edit instead`);
+        });
+      }
       await message.author.send(reply).catch(console.error);
     } else {
       console.log(`   ↳ No reply body from webhook — sending default ack`);
-      await message.author.send("✅ Your message was received and processed!").catch(console.error);
+      if (ackMessage) {
+        await ackMessage.edit("✅ Your message was received and processed!").catch(console.error);
+      } else {
+        await message.author.send("✅ Your message was received and processed!").catch(console.error);
+      }
     }
   } catch (err) {
     console.error(`❌ Webhook request failed: ${err.message}`);
-    await message.author.send(config.error_message).catch(console.error);
+    if (ackMessage) {
+      await ackMessage.edit(config.error_message).catch(console.error);
+    } else {
+      await message.author.send(config.error_message).catch(console.error);
+    }
   }
 });
 
