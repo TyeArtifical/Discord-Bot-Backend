@@ -176,7 +176,17 @@ client.on(Events.MessageCreate, async (message) => {
           console.log(`   ↳ Could not delete ack message, will edit instead`);
         });
       }
-      await message.author.send(reply).catch(console.error);
+      async function sendLongMessage(user, text) {
+        const chunks = [];
+      
+        for (let i = 0; i < text.length; i += 2000) {
+          chunks.push(text.slice(i, i + 2000));
+        }
+      
+        for (const chunk of chunks) {
+          await user.send(chunk);
+        }
+      }
     } else {
       console.log(`   ↳ No reply body from webhook — sending default ack`);
       if (ackMessage) {
