@@ -92,6 +92,18 @@ async function isAuthorized(userId) {
   }
 }
 
+async function sendLongMessage(user, text) {
+  const chunks = [];
+
+  for (let i = 0; i < text.length; i += 2000) {
+    chunks.push(text.slice(i, i + 2000));
+  }
+
+  for (const chunk of chunks) {
+    await user.send(chunk);
+  }
+}
+
 client.on(Events.MessageCreate, async (message) => {
   if (message.author.bot) return;
   if (message.guild) return;
@@ -176,17 +188,7 @@ client.on(Events.MessageCreate, async (message) => {
           console.log(`   ↳ Could not delete ack message, will edit instead`);
         });
       }
-      async function sendLongMessage(user, text) {
-        const chunks = [];
-      
-        for (let i = 0; i < text.length; i += 2000) {
-          chunks.push(text.slice(i, i + 2000));
-        }
-      
-        for (const chunk of chunks) {
-          await user.send(chunk);
-        }
-      }
+      await sendLongMessage(message.author, reply).catch(console.error);
     } else {
       console.log(`   ↳ No reply body from webhook — sending default ack`);
       if (ackMessage) {
