@@ -10,6 +10,7 @@ const ALLOWED_GUILD_ID = process.env.ALLOWED_GUILD_ID;
 const ALLOWED_ROLE_ID  = process.env.ALLOWED_ROLE_ID;
 const WEBHOOK_USER     = process.env.WEBHOOK_USER;
 const WEBHOOK_PASS     = process.env.WEBHOOK_PASS;
+const WEBHOOK_TIMEOUT  = parseInt(process.env.WEBHOOK_TIMEOUT || "180000", 10);
 
 if (!BOT_TOKEN)        throw new Error("Missing BOT_TOKEN in .env");
 if (!WEBHOOK_BASE_URL) throw new Error("Missing WEBHOOK_BASE_URL in .env");
@@ -31,6 +32,7 @@ client.once(Events.ClientReady, async (readyClient) => {
   console.log(`✅ Bot is online as ${readyClient.user.tag}`);
   console.log(`📋 Watching guild: ${ALLOWED_GUILD_ID}`);
   console.log(`🔑 Required role:  ${ALLOWED_ROLE_ID}`);
+  console.log(`⏱️  Webhook timeout: ${WEBHOOK_TIMEOUT}ms`);
 
   // Force-fetch all guild members into cache so GuildMemberUpdate fires reliably
   try {
@@ -104,6 +106,66 @@ async function sendLongMessage(user, text) {
   }
 }
 
+/**
+ * Extract reply text from webhook response.
+ * Tries multiple common response formats to handle different webhook implementations.
+ */
+function extractReply(responseData) {
+  if (!responseData) {
+    console.log(`   ↳ No response data received`);
+    return null;
+  }
+
+  console.log(`   ↳ Response data type: ${typeof responseData}`);
+  console.log(`   ↳ Response data: ${JSON.stringify(responseData).substring(0, 500)}`);
+
+  // Direct string response
+  if (typeof responseData === "string") {
+    const trimmed = responseData.trim();
+    console.log(`   ↳ Extracted direct string reply (length: ${trimmed.length})`);
+    return trimmed || null;
+  }
+
+  // Object response - try common fields
+  if (typeof responseData === "object") {
+    const possibleFields = [
+      'message',
+      'reply',
+      'text',
+      'response',
+      'content',
+      'output',
+      'result',
+      'data'
+    ];
+
+    for (const field of possibleFields) {
+      if (responseData[field]) {
+        const value = responseData[field];
+        if (typeof value === "string") {
+          const trimmed = value.trim();
+          if (trimmed) {
+            console.log(`   ↳ Extracted reply from field '${field}' (length: ${trimmed.length})`);
+            return trimmed;
+          }
+        } else if (typeof value === "object" && value.text) {
+          // Nested text field (e.g., response.data.text)
+          const trimmed = value.text.trim();
+          if (trimmed) {
+            console.log(`   ↳ Extracted nested reply from '${field}.text' (length: ${trimmed.length})`);
+            return trimmed;
+          }
+        }
+      }
+    }
+
+    // If it's an object but no recognized field, log all keys for debugging
+    console.log(`   ↳ No recognized reply field found. Available keys: [${Object.keys(responseData).join(', ')}]`);
+  }
+
+  return null;
+}
+
 client.on(Events.MessageCreate, async (message) => {
   if (message.author.bot) return;
   if (message.guild) return;
@@ -160,7 +222,7 @@ client.on(Events.MessageCreate, async (message) => {
 
   try {
     const response = await axios.post(WEBHOOK_BASE_URL, payload, {
-      timeout: 190000,
+      timeout: WEBHOOK_TIMEOUT,
       auth: {
         username: WEBHOOK_USER,
         password: WEBHOOK_PASS,
@@ -170,37 +232,55 @@ client.on(Events.MessageCreate, async (message) => {
       },
     });
     console.log(`   ↳ Webhook status: ${response.status}`);
-    console.log(`   ↳ Webhook response: ${JSON.stringify(response.data)}`);
 
-    let reply = null;
-    if (response.data) {
-      if (typeof response.data === "string")  reply = response.data;
-      else if (response.data.message)         reply = response.data.message;
-      else if (response.data.reply)           reply = response.data.reply;
-      else if (response.data.text)            reply = response.data.text;
-    }
+    const reply = extractReply(response.data);
 
     if (reply) {
-      console.log(`   ↳ Sending webhook reply to user: "${reply}"`);
-      // Delete the "processing" message if it exists
+      console.log(`   ↳ Sending webhook reply to user (length: ${reply.length} chars)`);
+      console.log(`   ↳ Reply preview: ${reply.substring(0, 200)}${reply.length > 200 ? '...' : ''}`);
+      
+      // Delete the "processing" message before sending the actual reply
       if (ackMessage) {
-        await ackMessage.delete().catch(() => {
-          console.log(`   ↳ Could not delete ack message, will edit instead`);
-        });
+        try {
+          await ackMessage.delete();
+          console.log(`   ↳ Deleted acknowledgment message`);
+        } catch (delErr) {
+          console.log(`   ↳ Could not delete ack message: ${delErr.message}`);
+        }
       }
-      await sendLongMessage(message.author, reply).catch(console.error);
+      
+      // Send the actual reply
+      await sendLongMessage(message.author, reply);
+      console.log(`✅ Reply sent successfully to ${userTag}`);
     } else {
-      console.log(`   ↳ No reply body from webhook — sending default ack`);
+      console.log(`⚠️  No valid reply extracted from webhook response`);
+      console.log(`   ↳ Full response for debugging: ${JSON.stringify(response.data)}`);
+      
+      // Update or send fallback message
       if (ackMessage) {
-        await ackMessage.edit("✅ Your message was received and processed!").catch(console.error);
+        try {
+          await ackMessage.edit("✅ Your message was received and processed, but no response was generated.");
+        } catch (editErr) {
+          console.error(`   ↳ Could not edit ack message: ${editErr.message}`);
+        }
       } else {
-        await message.author.send("✅ Your message was received and processed!").catch(console.error);
+        await message.author.send("✅ Your message was received and processed, but no response was generated.").catch(console.error);
       }
     }
   } catch (err) {
     console.error(`❌ Webhook request failed: ${err.message}`);
+    if (err.response) {
+      console.error(`   ↳ Response status: ${err.response.status}`);
+      console.error(`   ↳ Response data: ${JSON.stringify(err.response.data)}`);
+    }
+    
     if (ackMessage) {
-      await ackMessage.edit(config.error_message).catch(console.error);
+      try {
+        await ackMessage.edit(config.error_message);
+      } catch (editErr) {
+        console.error(`   ↳ Could not edit ack message: ${editErr.message}`);
+        await message.author.send(config.error_message).catch(console.error);
+      }
     } else {
       await message.author.send(config.error_message).catch(console.error);
     }
