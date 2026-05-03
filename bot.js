@@ -292,3 +292,5 @@ process.on("unhandledRejection", (err) => {
 });
 
 client.login(BOT_TOKEN);
+
+// redeploy
